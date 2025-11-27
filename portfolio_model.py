@@ -132,104 +132,117 @@ def allocate_hours_with_nn(
         "teaching": teaching,                  # (E,)
     }
 
+def _short_label(name: str) -> str:
+    """
+    Forsøger at trække kortkode ud af navnet:
+    'Søren Erbs Poulsen (SOEB)' -> 'SOEB'
+    Hvis der ikke findes parenteser, returneres hele navnet.
+    """
+    if "(" in name and ")" in name:
+        try:
+            return name.split("(")[-1].split(")")[0].strip()
+        except Exception:
+            return name
+    return name
+
+
 def print_allocation_report(
     employees: List[Employee],
     projects: List[Project],
     allocation_result: Dict[str, np.ndarray],
 ) -> None:
-    hours = allocation_result["hours_projects"]           # (P, E+1)
-    centertime = allocation_result["centertime"]          # (E,)
-    all_names = allocation_result["names_employees"]      # (E+1,)
-    all_rates = allocation_result["rates"]                # (E+1,)
+    """
+    Kompakt og læsbar rapport:
+
+      1) Medarbejderoversigt (fulde navne + koder, løn, portefølje, undervisning, projekttimer, centertid)
+      2) Projektoversigt (budgetter)
+      3) Allokering pr. projekt:
+         - timer pr. medarbejder (med koder som kolonneoverskrifter)
+         - sum timer og sum løn pr. projekt
+    """
+
+    hours = allocation_result["hours_projects"]                # (P, E+1)
+    centertime = allocation_result["centertime"]               # (E,)
+    all_names = allocation_result["names_employees"]           # (E+1,)
+    all_rates = allocation_result["rates"]                     # (E+1,)
     all_eff_port = allocation_result["effective_portfolio_all"]  # (E+1,)
-    total_port = allocation_result["total_portfolio"]     # (E,)
-    teaching = allocation_result["teaching"]              # (E,)
+    total_port = allocation_result["total_portfolio"]          # (E,)
+    teaching = allocation_result["teaching"]                   # (E,)
 
     n_p, n_e_all = hours.shape
     n_e = len(employees)
 
-    # --------- 1) Medarbejderinput ---------
-    print("\n=== Medarbejdere (input) ===\n")
-    print("{:<20}{:>15}{:>18}{:>18}{:>20}".format(
-        "Medarbejder", "Timepris", "Portefølje", "Undervisning", "Til projekter"
+    # Korte labels til kolonner (inkl. NN)
+    all_labels = [_short_label(n) for n in all_names]
+
+    # Projekttimer pr. medarbejder (inkl. NN)
+    proj_hours_per_emp = hours.sum(axis=0)  # (E+1,)
+
+    # ---------------- 1) Medarbejderoversigt ----------------
+    print("\n=== MEDARBEJDERE (INPUT + RESULTAT) ===\n")
+    print("{:<35}{:<8}{:>10}{:>12}{:>12}{:>12}{:>12}".format(
+        "Navn", "Kode", "Timepris", "Portef.[t]", "Underv.[t]",
+        "Proj.[t]", "Center[t]"
     ))
+
     for j, emp in enumerate(employees):
-        eff = total_port[j] - teaching[j]
-        print("{:<20}{:>15.2f}{:>18.2f}{:>18.2f}{:>20.2f}".format(
-            emp.name,
+        label = _short_label(emp.name)
+        port = total_port[j]
+        teach = teaching[j]
+        proj_h = proj_hours_per_emp[j]
+        center_h = centertime[j]
+
+        print("{:<35}{:<8}{:>10.0f}{:>12.1f}{:>12.1f}{:>12.1f}{:>12.1f}".format(
+            emp.name[:35],
+            label,
             emp.hourly_rate,
-            total_port[j],
-            teaching[j],
-            eff
+            port,
+            teach,
+            proj_h,
+            center_h,
         ))
 
-    # NN
+    # NN-medarbejder (kun projekttimer er interessante)
     nn_name = all_names[-1]
+    nn_label = all_labels[-1]
     nn_rate = all_rates[-1]
-    nn_eff = all_eff_port[-1]
-    print("{:<20}{:>15.2f}{:>18}{:>18}{:>20.2f}  (NN)".format(
-        nn_name, nn_rate, "-", "-", nn_eff
+    nn_proj_h = proj_hours_per_emp[-1]
+
+    print("{:<35}{:<8}{:>10.0f}{:>12}{:>12}{:>12.1f}{:>12}".format(
+        nn_name[:35],
+        nn_label,
+        nn_rate,
+        "-",
+        "-",
+        nn_proj_h,
+        "-",
     ))
 
-    # --------- 2) Projekter ---------
-    print("\n=== Projekter (input) ===\n")
-    print("{:<20}{:>20}".format("Projekt", "Budget [kr]"))
+    # ---------------- 2) Projekter ----------------
+    print("\n=== PROJEKTER (INPUT) ===\n")
+    print("{:<20}{:>15}".format("Projekt", "Budget [kr]"))
     for proj in projects:
-        print("{:<20}{:>20.2f}".format(proj.name, proj.budget))
+        print("{:<20}{:>15.0f}".format(proj.name, proj.budget))
 
-    # --------- 3) Allokering pr. projekt ---------
-    print("\n=== Allokering pr. projekt (timer og økonomi) ===\n")
+    # ---------------- 3) Allokering pr. projekt ----------------
+    print("\n=== ALLOKERING PR. PROJEKT (TIMER OG ØKONOMI) ===\n")
 
-    header = ["Projekt"] + [f"{name} [t]" for name in all_names] + [
-        "Sum timer", "Sum løn", "Budget", "Afvigelse"
-    ]
+    # Header: Projekt + én kolonne pr. medarbejder (kode) + sumtimer + sumløn
+    header = ["Projekt"] + [lbl for lbl in all_labels] + ["Sum[t]", "Sum løn[kr]"]
     print("{:<20}".format(header[0]), end="")
     for h in header[1:]:
-        print("{:>15}".format(h), end="")
+        print("{:>10}".format(h), end="")
     print()
 
     for i, proj in enumerate(projects):
-        row_hours = hours[i, :]
+        row_hours = hours[i, :]                  # (E+1,)
         row_costs = row_hours * all_rates
         sum_hours = float(row_hours.sum())
         sum_cost = float(row_costs.sum())
-        budget = proj.budget
-        diff = sum_cost - budget
 
-        print("{:<20}".format(proj.name), end="")
+        print("{:<20}".format(proj.name[:20]), end="")
         for j in range(n_e_all):
-            print("{:>15.2f}".format(row_hours[j]), end="")
-        print("{:>15.2f}{:>15.2f}{:>15.2f}{:>15.2f}".format(
-            sum_hours, sum_cost, budget, diff
-        ))
+            print("{:>10.1f}".format(row_hours[j]), end="")
+        print("{:>10.1f}{:>10.0f}".format(sum_hours, sum_cost))
 
-    # --------- 4) Medarbejderporteføljer ---------
-    print("\n=== Medarbejderporteføljer (projekter, undervisning, centertid) ===\n")
-    print("{:<20}{:>15}{:>15}{:>15}{:>15}{:>15}".format(
-        "Medarbejder", "Portefølje", "Undervisning", "Proj.timer",
-        "Centertid", "Proj.andel"
-    ))
-
-    proj_hours_per_emp = hours.sum(axis=0)  # (E+1,)
-
-    # Kendte medarbejdere
-    for j, emp in enumerate(employees):
-        port = total_port[j]
-        teach = teaching[j]
-        eff = port - teach
-        proj_h = proj_hours_per_emp[j]
-        center_h = centertime[j]
-        proj_share = (proj_h / eff * 100.0) if eff > 0 else 0.0
-
-        print("{:<20}{:>15.2f}{:>15.2f}{:>15.2f}{:>15.2f}{:>15.1f}".format(
-            emp.name, port, teach, proj_h, center_h, proj_share
-        ))
-
-    # NN
-    nn_proj_h = proj_hours_per_emp[-1]
-    nn_eff = all_eff_port[-1]
-    nn_share = (nn_proj_h / nn_eff * 100.0) if nn_eff > 0 else 0.0
-
-    print("{:<20}{:>15}{:>15}{:>15.2f}{:>15}{:>15.1f}".format(
-        nn_name, "-", "-", nn_proj_h, "-", nn_share
-    ))
+    print()  # ekstra linjeskift til sidst
