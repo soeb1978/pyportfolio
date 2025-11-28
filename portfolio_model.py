@@ -134,9 +134,9 @@ def allocate_hours_with_nn(
 
 def _short_label(name: str) -> str:
     """
-    Forsøger at trække kortkode ud af navnet:
+    Trækker kortkode ud af navnet:
     'Søren Erbs Poulsen (SOEB)' -> 'SOEB'
-    Hvis der ikke findes parenteser, returneres hele navnet.
+    Bruges kun internt hvis du senere vil have korte labels.
     """
     if "(" in name and ")" in name:
         try:
@@ -154,47 +154,42 @@ def print_allocation_report(
     """
     Kompakt og læsbar rapport:
 
-      1) Medarbejderoversigt (fulde navne + koder, løn, portefølje, undervisning, projekttimer, centertid)
+      1) Medarbejderoversigt (fulde navne, løn, portefølje, undervisning, projekttimer, centertid)
       2) Projektoversigt (budgetter)
-      3) Allokering pr. projekt:
-         - timer pr. medarbejder (med koder som kolonneoverskrifter)
-         - sum timer og sum løn pr. projekt
+      3) Allokering (pivot):
+         - rækker: medarbejdere (inkl. NN)
+         - kolonner: projekter
+         - sidste kolonne: sum projekttimer pr. medarbejder
     """
 
     hours = allocation_result["hours_projects"]                # (P, E+1)
     centertime = allocation_result["centertime"]               # (E,)
     all_names = allocation_result["names_employees"]           # (E+1,)
     all_rates = allocation_result["rates"]                     # (E+1,)
-    all_eff_port = allocation_result["effective_portfolio_all"]  # (E+1,)
     total_port = allocation_result["total_portfolio"]          # (E,)
     teaching = allocation_result["teaching"]                   # (E,)
 
     n_p, n_e_all = hours.shape
     n_e = len(employees)
 
-    # Korte labels til kolonner (inkl. NN)
-    all_labels = [_short_label(n) for n in all_names]
-
     # Projekttimer pr. medarbejder (inkl. NN)
-    proj_hours_per_emp = hours.sum(axis=0)  # (E+1,)
+    proj_hours_per_emp = hours.sum(axis=0)           # (E+1,)
 
-    # ---------------- 1) Medarbejderoversigt ----------------
+    # ---------------- 1) Medarbejdere ----------------
     print("\n=== MEDARBEJDERE (INPUT + RESULTAT) ===\n")
-    print("{:<35}{:<8}{:>10}{:>12}{:>12}{:>12}{:>12}".format(
-        "Navn", "Kode", "Timepris", "Portef.[t]", "Underv.[t]",
+    print("{:<35}{:>10}{:>12}{:>12}{:>12}{:>12}".format(
+        "Medarbejder", "Timepris", "Portef.[t]", "Underv.[t]",
         "Proj.[t]", "Center[t]"
     ))
 
     for j, emp in enumerate(employees):
-        label = _short_label(emp.name)
         port = total_port[j]
         teach = teaching[j]
         proj_h = proj_hours_per_emp[j]
         center_h = centertime[j]
 
-        print("{:<35}{:<8}{:>10.0f}{:>12.1f}{:>12.1f}{:>12.1f}{:>12.1f}".format(
+        print("{:<35}{:>10.0f}{:>12.1f}{:>12.1f}{:>12.1f}{:>12.1f}".format(
             emp.name[:35],
-            label,
             emp.hourly_rate,
             port,
             teach,
@@ -202,15 +197,13 @@ def print_allocation_report(
             center_h,
         ))
 
-    # NN-medarbejder (kun projekttimer er interessante)
+    # NN-medarbejder
     nn_name = all_names[-1]
-    nn_label = all_labels[-1]
     nn_rate = all_rates[-1]
     nn_proj_h = proj_hours_per_emp[-1]
 
-    print("{:<35}{:<8}{:>10.0f}{:>12}{:>12}{:>12.1f}{:>12}".format(
+    print("{:<35}{:>10.0f}{:>12}{:>12}{:>12.1f}{:>12}".format(
         nn_name[:35],
-        nn_label,
         nn_rate,
         "-",
         "-",
@@ -224,25 +217,35 @@ def print_allocation_report(
     for proj in projects:
         print("{:<20}{:>15.0f}".format(proj.name, proj.budget))
 
-    # ---------------- 3) Allokering pr. projekt ----------------
-    print("\n=== ALLOKERING PR. PROJEKT (TIMER OG ØKONOMI) ===\n")
+    # ---------------- 3) Allokering (pivot) ----------------
+    print("\n=== ALLOKERING – MEDARBEJDERE × PROJEKTER (HELE TIMER) ===\n")
 
-    # Header: Projekt + én kolonne pr. medarbejder (kode) + sumtimer + sumløn
-    header = ["Projekt"] + [lbl for lbl in all_labels] + ["Sum[t]", "Sum løn[kr]"]
-    print("{:<20}".format(header[0]), end="")
-    for h in header[1:]:
-        print("{:>10}".format(h), end="")
+    proj_names = [p.name for p in projects]
+
+    # Header: medarbejder + én kolonne pr. projekt + sum
+    print("{:<35}".format("Medarbejder"), end="")
+    for pname in proj_names:
+        print("{:>12}".format(pname[:11]), end="")
+    print("{:>12}".format("Sum proj."))
     print()
 
-    for i, proj in enumerate(projects):
-        row_hours = hours[i, :]                  # (E+1,)
-        row_costs = row_hours * all_rates
-        sum_hours = float(row_hours.sum())
-        sum_cost = float(row_costs.sum())
+    # Pivot: rows = medarbejdere, cols = projekter
+    hours_T = hours.T   # (E+1, P)
 
-        print("{:<20}".format(proj.name[:20]), end="")
-        for j in range(n_e_all):
-            print("{:>10.1f}".format(row_hours[j]), end="")
-        print("{:>10.1f}{:>10.0f}".format(sum_hours, sum_cost))
+    # Kendte medarbejdere
+    for j, emp in enumerate(employees):
+        row = hours_T[j, :]          # (P,)
+        row_sum = proj_hours_per_emp[j]
+        print("{:<35}".format(emp.name[:35]), end="")
+        for i in range(n_p):
+            print("{:>12.0f}".format(round(row[i])), end="")
+        print("{:>12.0f}".format(round(row_sum)))
+
+    # NN-række
+    nn_row = hours_T[-1, :]
+    print("{:<35}".format(nn_name[:35]), end="")
+    for i in range(n_p):
+        print("{:>12.0f}".format(round(nn_row[i])), end="")
+    print("{:>12.0f}".format(round(nn_proj_h)))
 
     print()  # ekstra linjeskift til sidst
