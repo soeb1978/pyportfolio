@@ -2,6 +2,7 @@ import numpy as np
 from dataclasses import dataclass
 from typing import List, Dict, Tuple, Optional
 from scipy.optimize import linprog
+import pandas as pd
 
 
 @dataclass
@@ -249,3 +250,93 @@ def print_allocation_report(
     print("{:>12.0f}".format(round(nn_proj_h)))
 
     print()  # ekstra linjeskift til sidst
+
+def portfolio_to_dataframe(
+    employees: List[Employee],
+    projects: List[Project],
+    allocation_result: Dict[str, np.ndarray],
+    semester_label: str,
+) -> pd.DataFrame:
+    """
+    Returnerer en DataFrame med porteføljen for et givent semester.
+
+    Rækker: medarbejdere (inkl. NN)
+    Kolonner:
+      - én kolonne pr. projekt (timer)
+      - 'Sum projekter [t]'
+      - 'Undervisning [t]'
+      - 'Centertid [t]'
+      - 'Portefølje total [t]'
+      - 'Periode'
+    Alle timer afrundes til heltal.
+    """
+
+    hours = allocation_result["hours_projects"]          # (P, E+1)
+    centertime = allocation_result["centertime"]         # (E,)
+    all_names = allocation_result["names_employees"]     # (E+1,)
+    total_port = allocation_result["total_portfolio"]    # (E,)
+    teaching = allocation_result["teaching"]             # (E,)
+
+    proj_names = [p.name for p in projects]
+
+    df = pd.DataFrame(
+        hours.T,               # form (E+1, P)
+        index=all_names,
+        columns=proj_names,
+    )
+
+    df["Sum projekter [t]"] = df[proj_names].sum(axis=1)
+
+    teaching_full = list(teaching) + [float("nan")]
+    centertime_full = list(centertime) + [float("nan")]
+    total_port_full = list(total_port) + [float("nan")]
+
+    df["Undervisning [t]"] = teaching_full
+    df["Centertid [t]"] = centertime_full
+    df["Portefølje total [t]"] = total_port_full
+
+    # Periodekolonne – samme label for alle rækker
+    df["Periode"] = semester_label
+
+    # Afrund alle time-kolonner til heltal
+    hour_cols = proj_names + [
+        "Sum projekter [t]",
+        "Undervisning [t]",
+        "Centertid [t]",
+        "Portefølje total [t]",
+    ]
+    df[hour_cols] = df[hour_cols].round(0)
+
+    df.index.name = "Medarbejder"
+    return df
+
+
+def export_portfolio_to_excel(
+    employees: List[Employee],
+    projects: List[Project],
+    allocation_result: Dict[str, np.ndarray],
+    semester_label: str,
+    filename: str | None = None,
+) -> None:
+    """
+    Gemmer porteføljen i et Excel-ark.
+
+    Hvis filename ikke angives, bruges:
+        f"portefolje_{semester_label}.xlsx"
+    """
+
+    if filename is None:
+        filename = f"portefolje_{semester_label}.xlsx"
+
+    df = portfolio_to_dataframe(
+        employees=employees,
+        projects=projects,
+        allocation_result=allocation_result,
+        semester_label=semester_label,
+    )
+
+    df.to_excel(
+        filename,
+        sheet_name=f"Portefølje_{semester_label}",
+        index=True,
+    )

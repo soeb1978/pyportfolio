@@ -2,10 +2,13 @@ from portfolio_model import (
     Employee, Project,
     allocate_hours_with_nn,
     print_allocation_report,
+    export_portfolio_to_excel,
     AllocationError,
 )
 
 def main():
+    semester = "F2026"  # Forår 2026
+
     employees = [
         Employee("Søren Erbs Poulsen (SOEB)", hourly_rate=656.64, portfolio_hours=657.5, teaching_hours=0),
         Employee("Mathias Larsen (MATL)",   hourly_rate=531.36, portfolio_hours=657.5, teaching_hours=450.0),   #150 på Ronja, Torben 300
@@ -52,6 +55,18 @@ def main():
         return
 
     print_allocation_report(employees, projects, result)
+
+    # Gem til Excel til administrationsbrug
+    export_portfolio_to_excel(
+        employees=employees,
+        projects=projects,
+        allocation_result=result,
+        semester_label=semester,
+        # filename kan udelades, så bliver det f.eks. "portefolje_F2026.xlsx"
+        filename=f"Portefølje_{semester}.xlsx",
+    )
+    print("Porteføljen er gemt i 'portefolje_semester1.xlsx'.")
+
 
 
 if __name__ == "__main__":
