@@ -216,11 +216,11 @@ def print_allocation_report(
     proj_names = [p.name for p in projects]
 
     # Header: medarbejder + én kolonne pr. projekt + sum
-    print("{:<35}".format("Medarbejder"), end="")
+    print("{:<35}".format("Medarbejder / Projekter"), end="")
     for pname in proj_names:
-        print("{:>12}".format(pname[:11]), end="")
-    print("{:>12}".format("Sum proj."))
-    print("-" * 120)
+        print("{:>15}".format(pname[:11]), end="")
+    print("{:>15}".format("Sum projekter"))
+    print("-" * 125)
 
     hours_T = hours.T   # (E+1, P)
 
@@ -230,15 +230,15 @@ def print_allocation_report(
         row_sum = proj_hours_per_emp[j]
         print("{:<35}".format(emp.name[:35]), end="")
         for i in range(n_p):
-            print("{:>12.0f}".format(round(row[i])), end="")
-        print("{:>12.0f}".format(round(row_sum)))
+            print("{:>15.0f}".format(round(row[i])), end="")
+        print("{:>15.0f}".format(round(row_sum)))
 
     # NN-række
     nn_row = hours_T[-1, :]
     print("{:<35}".format(nn_name[:35]), end="")
     for i in range(n_p):
-        print("{:>12.0f}".format(round(nn_row[i])), end="")
-    print("{:>12.0f}".format(round(nn_proj_h)))
+        print("{:>15.0f}".format(round(nn_row[i])), end="")
+    print("{:>15.0f}".format(round(nn_proj_h)))
 
     # Ekstra række: samlet projektløn [kr] pr. projekt
     print("\n*** KONTROL: SAMLET PROJEKTLØN [kr] (SKAL MATCHE PERIODENS BUDGETTER) ***")
