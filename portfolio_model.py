@@ -12,13 +12,15 @@ class Employee:
     portfolio_hours: float       # samlet portefølje pr. periode (t)
     teaching_hours: float = 0.0  # obligatorisk undervisning i perioden (t)
 
+
 @dataclass
 class Project:
     name: str
-    budget: float               # kr pr. semester
+    budget: float                # kr pr. periode (lønbudget)
 
 
 class AllocationError(Exception):
+    """Kastes hvis der ikke kan findes en gennemførlig løsning."""
     pass
 
 
@@ -31,13 +33,13 @@ def allocate_hours_with_nn(
     nn_max_hours: float = 10_000.0,
 ) -> Dict[str, np.ndarray]:
     """
-    Fordeler timer på projekter for kendte medarbejdere + NN, efter at
+    Fordeler projekttimer på kendte medarbejdere + NN, efter at
     obligatorisk undervisning er trukket ud af porteføljen.
 
     For hver medarbejder j:
       effektiv_projektportefølje_j = portfolio_hours_j - teaching_hours_j
 
-    LP'en styrer kun de effektive projekttimer.
+    LP'en disponerer kun over de effektive projekttimer.
     """
 
     n_e = len(employees)
@@ -46,7 +48,7 @@ def allocate_hours_with_nn(
     if n_e == 0 or n_p == 0:
         raise ValueError("Der skal være mindst én medarbejder og ét projekt.")
 
-    # Total portefølje og teaching pr. medarbejder
+    # Total portefølje og undervisning pr. medarbejder
     total_port = np.array([emp.portfolio_hours for emp in employees])
     teaching = np.array([emp.teaching_hours for emp in employees])
 
@@ -73,10 +75,7 @@ def allocate_hours_with_nn(
     for i, proj in enumerate(projects):
         for j, name in enumerate(all_names):
             k = i * n_e_all + j
-            if priorities is not None:
-                w = priorities.get((name, proj.name), 1.0)
-            else:
-                w = 1.0
+            w = priorities.get((name, proj.name), 1.0) if priorities else 1.0
             c[k] = -w
 
     # Lighed: projektbudgetter (i kr)
@@ -87,7 +86,7 @@ def allocate_hours_with_nn(
         b_eq[i] = proj.budget
         for j in range(n_e_all):
             k = i * n_e_all + j
-            A_eq[i, k] = all_rates[j]
+            A_eq[i, k] = all_rates[j]   # kr/time
 
     # Ulighed: timeloft pr. medarbejder (effektiv portefølje)
     A_ub = np.zeros((n_e_all, n_vars))
@@ -105,7 +104,7 @@ def allocate_hours_with_nn(
         A_ub=A_ub, b_ub=b_ub,
         A_eq=A_eq, b_eq=b_eq,
         bounds=bounds,
-        method="highs"
+        method="highs",
     )
 
     if not res.success:
@@ -117,34 +116,21 @@ def allocate_hours_with_nn(
     # Projekttimer pr. medarbejder (inkl. NN)
     proj_hours_per_emp = hours.sum(axis=0)  # (E+1,)
 
-    # Centertid = total_port - teaching - projekttimer
+    # Centertid = total_port - teaching - projekttimer (kun kendte medarbejdere)
     centertime = np.maximum(
         total_port - teaching - proj_hours_per_emp[:n_e],
-        0.0
+        0.0,
     )
 
     return {
-        "hours_projects": hours,
-        "centertime": centertime,               # (E,)
-        "names_employees": all_names,          # (E+1,)
-        "rates": all_rates,                    # (E+1,)
-        "effective_portfolio_all": all_eff_port,  # (E+1,)
-        "total_portfolio": total_port,         # (E,)
-        "teaching": teaching,                  # (E,)
+        "hours_projects": hours,          # (P, E+1)
+        "centertime": centertime,         # (E,)
+        "names_employees": all_names,     # (E+1,)
+        "rates": all_rates,               # (E+1,)
+        "effective_portfolio_all": all_eff_port,  # (E+1,) – kan fjernes hvis overflødig
+        "total_portfolio": total_port,    # (E,)
+        "teaching": teaching,             # (E,)
     }
-
-def _short_label(name: str) -> str:
-    """
-    Trækker kortkode ud af navnet:
-    'Søren Erbs Poulsen (SOEB)' -> 'SOEB'
-    Bruges kun internt hvis du senere vil have korte labels.
-    """
-    if "(" in name and ")" in name:
-        try:
-            return name.split("(")[-1].split(")")[0].strip()
-        except Exception:
-            return name
-    return name
 
 
 def print_allocation_report(
@@ -153,14 +139,15 @@ def print_allocation_report(
     allocation_result: Dict[str, np.ndarray],
 ) -> None:
     """
-    Kompakt og læsbar rapport:
+    Konsolrapport:
 
-      1) Medarbejderoversigt (fulde navne, løn, portefølje, undervisning, projekttimer, centertid)
+      1) Medarbejderoversigt (timepris, portefølje, undervisning, projekttimer, centertid)
       2) Projektoversigt (budgetter)
       3) Allokering (pivot):
          - rækker: medarbejdere (inkl. NN)
          - kolonner: projekter
          - sidste kolonne: sum projekttimer pr. medarbejder
+         - ekstra nederste række: samlet projektløn [kr] pr. projekt
     """
 
     hours = allocation_result["hours_projects"]                # (P, E+1)
@@ -176,11 +163,16 @@ def print_allocation_report(
     # Projekttimer pr. medarbejder (inkl. NN)
     proj_hours_per_emp = hours.sum(axis=0)           # (E+1,)
 
+    # Samlede lønudgifter pr. projekt (kr)
+    # hours: (P, E+1), all_rates: (E+1,) -> elementvis produkt og sum over medarbejdere
+    project_costs = (hours * all_rates).sum(axis=1)  # (P,)
+    total_cost_all = project_costs.sum()
+
     # ---------------- 1) Medarbejdere ----------------
     print("\n=== MEDARBEJDERE (INPUT + RESULTAT) ===\n")
-    print("{:<35}{:>10}{:>12}{:>12}{:>12}{:>12}".format(
-        "Medarbejder", "Timepris", "Portef.[t]", "Underv.[t]",
-        "Proj.[t]", "Center[t]"
+    print("{:<35}{:>20}{:>20}{:>20}{:>20}{:>20}".format(
+        "Medarbejder", "Timepris", "Portefølje [t]", "Undervisning [t]",
+        "Projekter [t]", "Center [t]"
     ))
 
     for j, emp in enumerate(employees):
@@ -189,7 +181,7 @@ def print_allocation_report(
         proj_h = proj_hours_per_emp[j]
         center_h = centertime[j]
 
-        print("{:<35}{:>10.0f}{:>12.1f}{:>12.1f}{:>12.1f}{:>12.1f}".format(
+        print("{:<35}{:>20.0f}{:>20.1f}{:>20.1f}{:>20.1f}{:>20.1f}".format(
             emp.name[:35],
             emp.hourly_rate,
             port,
@@ -203,7 +195,7 @@ def print_allocation_report(
     nn_rate = all_rates[-1]
     nn_proj_h = proj_hours_per_emp[-1]
 
-    print("{:<35}{:>10.0f}{:>12}{:>12}{:>12.1f}{:>12}".format(
+    print("{:<35}{:>20.0f}{:>20}{:>20}{:>20.1f}{:>20}".format(
         nn_name[:35],
         nn_rate,
         "-",
@@ -228,9 +220,8 @@ def print_allocation_report(
     for pname in proj_names:
         print("{:>12}".format(pname[:11]), end="")
     print("{:>12}".format("Sum proj."))
-    print()
+    print("-" * 120)
 
-    # Pivot: rows = medarbejdere, cols = projekter
     hours_T = hours.T   # (E+1, P)
 
     # Kendte medarbejdere
@@ -249,7 +240,13 @@ def print_allocation_report(
         print("{:>12.0f}".format(round(nn_row[i])), end="")
     print("{:>12.0f}".format(round(nn_proj_h)))
 
-    print()  # ekstra linjeskift til sidst
+    # Ekstra række: samlet projektløn [kr] pr. projekt
+    print("\n*** KONTROL: SAMLET PROJEKTLØN [kr] (SKAL MATCHE PERIODENS BUDGETTER) ***")
+    print("{:<35}".format("Sum projektløn [kr]"), end="")
+    for i in range(n_p):
+        print("{:>12.0f}".format(round(project_costs[i])), end="")
+    print("{:>12.0f}".format(round(total_cost_all)))
+    print()
 
 def portfolio_to_dataframe(
     employees: List[Employee],
@@ -260,7 +257,7 @@ def portfolio_to_dataframe(
     """
     Returnerer en DataFrame med porteføljen for et givent semester.
 
-    Rækker: medarbejdere (inkl. NN)
+    Rækker: medarbejdere (inkl. NN) + én ekstra række for samlet projektløn [kr]
     Kolonner:
       - én kolonne pr. projekt (timer)
       - 'Sum projekter [t]'
@@ -268,7 +265,7 @@ def portfolio_to_dataframe(
       - 'Centertid [t]'
       - 'Portefølje total [t]'
       - 'Periode'
-    Alle timer afrundes til heltal.
+    Alle timer afrundes til heltal (til Excel-brug).
     """
 
     hours = allocation_result["hours_projects"]          # (P, E+1)
@@ -276,15 +273,18 @@ def portfolio_to_dataframe(
     all_names = allocation_result["names_employees"]     # (E+1,)
     total_port = allocation_result["total_portfolio"]    # (E,)
     teaching = allocation_result["teaching"]             # (E,)
+    rates = allocation_result["rates"]                   # (E+1,)
 
     proj_names = [p.name for p in projects]
 
+    # Basis: medarbejdere (inkl. NN) × projekter (timer)
     df = pd.DataFrame(
         hours.T,               # form (E+1, P)
         index=all_names,
         columns=proj_names,
     )
 
+    # Sum projekttimer pr. medarbejder
     df["Sum projekter [t]"] = df[proj_names].sum(axis=1)
 
     teaching_full = list(teaching) + [float("nan")]
@@ -295,8 +295,19 @@ def portfolio_to_dataframe(
     df["Centertid [t]"] = centertime_full
     df["Portefølje total [t]"] = total_port_full
 
-    # Periodekolonne – samme label for alle rækker
     df["Periode"] = semester_label
+
+    # Beregn samlet lønudgift pr. projekt [kr]
+    # hours: (P, E+1), rates: (E+1,) -> (P, E+1) -> sum over medarbejdere
+    project_costs = (hours * rates).sum(axis=1)  # (P,)
+
+    cost_row_label = "*** Sum projektløn [kr]"
+    df.loc[cost_row_label, proj_names] = np.round(project_costs, 0)
+    df.loc[cost_row_label, "Sum projekter [t]"] = np.nan
+    df.loc[cost_row_label, "Undervisning [t]"] = np.nan
+    df.loc[cost_row_label, "Centertid [t]"] = np.nan
+    df.loc[cost_row_label, "Portefølje total [t]"] = np.nan
+    df.loc[cost_row_label, "Periode"] = semester_label
 
     # Afrund alle time-kolonner til heltal
     hour_cols = proj_names + [
@@ -310,23 +321,22 @@ def portfolio_to_dataframe(
     df.index.name = "Medarbejder"
     return df
 
-
 def export_portfolio_to_excel(
     employees: List[Employee],
     projects: List[Project],
     allocation_result: Dict[str, np.ndarray],
     semester_label: str,
-    filename: str | None = None,
+    filename: Optional[str] = None,
 ) -> None:
     """
     Gemmer porteføljen i et Excel-ark.
 
     Hvis filename ikke angives, bruges:
-        f"portefolje_{semester_label}.xlsx"
+        f"Portefølje_{semester_label}.xlsx"
     """
 
     if filename is None:
-        filename = f"portefolje_{semester_label}.xlsx"
+        filename = f"Portefølje_{semester_label}.xlsx"
 
     df = portfolio_to_dataframe(
         employees=employees,

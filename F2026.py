@@ -12,7 +12,7 @@ def main():
     employees = [
         Employee("Søren Erbs Poulsen (SOEB)", hourly_rate=656.64, portfolio_hours=657.5, teaching_hours=0),
         Employee("Mathias Larsen (MATL)",   hourly_rate=531.36, portfolio_hours=657.5, teaching_hours=450.0),   #150 på Ronja, Torben 300
-        Employee("Rune Kier Nielsen (RUNI)", hourly_rate=560.14, portfolio_hours=222, teaching_hours=0),
+        Employee("Rune Kier Nielsen (RUNI)", hourly_rate=560.14, portfolio_hours=1315/2-480, teaching_hours=0),
         Employee("Kristoffer Bested Nielsen (KRI)",  hourly_rate=499.35, portfolio_hours=657.5, teaching_hours=547.0),   
         Employee("Søren Andersen (SSSA)", hourly_rate=544.32, portfolio_hours=657.5, teaching_hours=500.0),           
         Employee("Karl Woldum Tordrup (KART)", hourly_rate=600.31, portfolio_hours=100, teaching_hours=0),
@@ -65,9 +65,7 @@ def main():
         # filename kan udelades, så bliver det f.eks. "portefolje_F2026.xlsx"
         filename=f"Portefølje_{semester}.xlsx",
     )
-    print("Porteføljen er gemt i 'portefolje_semester1.xlsx'.")
-
-
+    print("Porteføljen er gemt i "+f"Portefølje_{semester}.xlsx.")
 
 if __name__ == "__main__":
     main()
