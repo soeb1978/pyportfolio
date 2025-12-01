@@ -8,7 +8,8 @@ import pandas as pd
 @dataclass
 class Employee:
     name: str
-    hourly_rate: float           # kr/time
+    # hourly_rate bruges kun som reference i rapporten – IKKE i selve optimeringen
+    hourly_rate: float
     portfolio_hours: float       # samlet portefølje pr. periode (t)
     teaching_hours: float = 0.0  # obligatorisk undervisning i perioden (t)
 
@@ -24,22 +25,41 @@ class AllocationError(Exception):
     pass
 
 
-def allocate_hours_with_nn(
+def allocate_hours(
     employees: List[Employee],
     projects: List[Project],
     priorities: Optional[Dict[Tuple[str, str], float]] = None,
-    nn_name: str = "NN",
-    nn_hourly_rate: float = 600.0,
-    nn_max_hours: float = 10_000.0,
+    project_hourly_rates: Optional[np.ndarray] = None,
 ) -> Dict[str, np.ndarray]:
     """
-    Fordeler projekttimer på kendte medarbejdere + NN, efter at
-    obligatorisk undervisning er trukket ud af porteføljen.
+    Fordeler projekttimer på ALLE medarbejdere (inkl. 'NN (ufordelt)'),
+    efter at obligatorisk undervisning er trukket ud af porteføljen.
 
     For hver medarbejder j:
       effektiv_projektportefølje_j = portfolio_hours_j - teaching_hours_j
 
-    LP'en disponerer kun over de effektive projekttimer.
+    PARAMETRE
+    ---------
+    employees : liste af Employee
+    projects  : liste af Project
+    priorities: dict med nøgler (medarbejdernavn, projektnavn) og værdier (weights)
+                bruges til at vægte hvilke projekt/medarbejder-kombinationer, der
+                foretrækkes. Default 1.0 hvis ikke angivet.
+    project_hourly_rates : np.ndarray med form (n_projects, n_employees)
+                element (i,j) er timeprisen [kr/t] for projekt i og medarbejder j.
+                Denne matrix er OBLIGATORISK i denne version – satser fra Employee
+                bruges KUN som reference i rapporten.
+
+    RETURNERER
+    ----------
+    Dict med nøgler:
+      - "hours_projects":  (n_projects, n_employees) tildelte projekttimer
+      - "centertime":      (n_employees,) centertid pr. medarbejder
+      - "names_employees": liste af medarbejdernavne (længde n_employees)
+      - "rates":           reference-timepriser (Employee.hourly_rate)
+      - "total_portfolio": (n_employees,) total portefølje pr. medarbejder
+      - "teaching":        (n_employees,) undervisningstimer pr. medarbejder
+      - "rate_matrix":     (n_projects, n_employees) faktiske satser fra Excel
     """
 
     n_e = len(employees)
@@ -48,33 +68,40 @@ def allocate_hours_with_nn(
     if n_e == 0 or n_p == 0:
         raise ValueError("Der skal være mindst én medarbejder og ét projekt.")
 
+    if project_hourly_rates is None:
+        raise ValueError(
+            "project_hourly_rates skal angives og komme fra Excel (n_projects × n_employees)."
+        )
+
     # Total portefølje og undervisning pr. medarbejder
-    total_port = np.array([emp.portfolio_hours for emp in employees])
-    teaching = np.array([emp.teaching_hours for emp in employees])
+    total_port = np.array([emp.portfolio_hours for emp in employees], dtype=float)
+    teaching = np.array([emp.teaching_hours for emp in employees], dtype=float)
 
     # Effektiv portefølje til projekter
     eff_port = total_port - teaching
-
     if np.any(eff_port < -1e-6):
         raise AllocationError(
             "En eller flere medarbejdere har teaching_hours > portfolio_hours."
         )
 
-    # Udvidet medarbejderliste (kendte + NN)
-    all_names = [emp.name for emp in employees] + [nn_name]
-    all_rates = np.array([emp.hourly_rate for emp in employees] + [nn_hourly_rate])
+    names = [emp.name for emp in employees]
+    base_rates = np.array([emp.hourly_rate for emp in employees], dtype=float)
 
-    # Effektiv portefølje til LP’en (kendte + NN)
-    all_eff_port = np.concatenate([eff_port, np.array([nn_max_hours])])
+    # Rate-matrix pr. projekt og medarbejder (P × E)
+    rate_matrix = np.array(project_hourly_rates, dtype=float)
+    if rate_matrix.shape != (n_p, n_e):
+        raise ValueError(
+            f"project_hourly_rates skal have form (n_projects, n_employees) = ({n_p}, {n_e}), "
+            f"men har {rate_matrix.shape}"
+        )
 
-    n_e_all = n_e + 1
-    n_vars = n_p * n_e_all
+    n_vars = n_p * n_e
 
     # Objektfunktion: maksimer prioriteret projekttid (minimer -w_ij * h_ij)
     c = np.zeros(n_vars)
     for i, proj in enumerate(projects):
-        for j, name in enumerate(all_names):
-            k = i * n_e_all + j
+        for j, name in enumerate(names):
+            k = i * n_e + j
             w = priorities.get((name, proj.name), 1.0) if priorities else 1.0
             c[k] = -w
 
@@ -84,17 +111,17 @@ def allocate_hours_with_nn(
 
     for i, proj in enumerate(projects):
         b_eq[i] = proj.budget
-        for j in range(n_e_all):
-            k = i * n_e_all + j
-            A_eq[i, k] = all_rates[j]   # kr/time
+        for j in range(n_e):
+            k = i * n_e + j
+            A_eq[i, k] = rate_matrix[i, j]   # kr/time
 
     # Ulighed: timeloft pr. medarbejder (effektiv portefølje)
-    A_ub = np.zeros((n_e_all, n_vars))
-    b_ub = all_eff_port.copy()
+    A_ub = np.zeros((n_e, n_vars))
+    b_ub = eff_port.copy()
 
-    for j in range(n_e_all):
+    for j in range(n_e):
         for i in range(n_p):
-            k = i * n_e_all + j
+            k = i * n_e + j
             A_ub[j, k] = 1.0
 
     bounds = [(0, None)] * n_vars
@@ -111,25 +138,25 @@ def allocate_hours_with_nn(
         raise AllocationError(f"Løsning ikke mulig: {res.message}")
 
     x = res.x
-    hours = x.reshape((n_p, n_e_all))  # projekttimer (P × (E+1))
+    hours = x.reshape((n_p, n_e))  # projekttimer (P × E)
 
-    # Projekttimer pr. medarbejder (inkl. NN)
-    proj_hours_per_emp = hours.sum(axis=0)  # (E+1,)
+    # Projekttimer pr. medarbejder
+    proj_hours_per_emp = hours.sum(axis=0)  # (E,)
 
-    # Centertid = total_port - teaching - projekttimer (kun kendte medarbejdere)
+    # Centertid = total_port - teaching - projekttimer (alle medarbejdere inkl. NN)
     centertime = np.maximum(
-        total_port - teaching - proj_hours_per_emp[:n_e],
+        total_port - teaching - proj_hours_per_emp,
         0.0,
     )
 
     return {
-        "hours_projects": hours,          # (P, E+1)
+        "hours_projects": hours,          # (P, E)
         "centertime": centertime,         # (E,)
-        "names_employees": all_names,     # (E+1,)
-        "rates": all_rates,               # (E+1,)
-        "effective_portfolio_all": all_eff_port,  # (E+1,) – kan fjernes hvis overflødig
+        "names_employees": names,         # (E,)
+        "rates": base_rates,              # (E,) – kun reference
         "total_portfolio": total_port,    # (E,)
         "teaching": teaching,             # (E,)
+        "rate_matrix": rate_matrix,       # (P, E)
     }
 
 
@@ -141,38 +168,36 @@ def print_allocation_report(
     """
     Konsolrapport:
 
-      1) Medarbejderoversigt (timepris, portefølje, undervisning, projekttimer, centertid)
+      1) Medarbejderoversigt (reference-timepris, portefølje, undervisning, projekttimer, centertid)
       2) Projektoversigt (budgetter)
       3) Allokering (pivot):
-         - rækker: medarbejdere (inkl. NN)
-         - kolonner: projekter
+         - rækker: medarbejdere (inkl. 'NN (ufordelt)')
+         - kolonner: projekter (timer, afrundet)
          - sidste kolonne: sum projekttimer pr. medarbejder
-         - ekstra nederste række: samlet projektløn [kr] pr. projekt
+      4) Kontrol: projektbudget vs. beregnet projektløn
     """
 
-    hours = allocation_result["hours_projects"]                # (P, E+1)
+    hours = allocation_result["hours_projects"]                # (P, E)
     centertime = allocation_result["centertime"]               # (E,)
-    all_names = allocation_result["names_employees"]           # (E+1,)
-    all_rates = allocation_result["rates"]                     # (E+1,)
+    names = allocation_result["names_employees"]               # (E,)
+    base_rates = allocation_result["rates"]                    # (E,) reference
     total_port = allocation_result["total_portfolio"]          # (E,)
     teaching = allocation_result["teaching"]                   # (E,)
+    rate_matrix = allocation_result["rate_matrix"]             # (P, E)
 
-    n_p, n_e_all = hours.shape
-    n_e = len(employees)
+    n_p, n_e = hours.shape
 
-    # Projekttimer pr. medarbejder (inkl. NN)
-    proj_hours_per_emp = hours.sum(axis=0)           # (E+1,)
+    proj_hours_per_emp = hours.sum(axis=0)           # (E,)
 
     # Samlede lønudgifter pr. projekt (kr)
-    # hours: (P, E+1), all_rates: (E+1,) -> elementvis produkt og sum over medarbejdere
-    project_costs = (hours * all_rates).sum(axis=1)  # (P,)
-    total_cost_all = project_costs.sum()
+    project_costs = (hours * rate_matrix).sum(axis=1)  # (P,)
+    total_cost_all = float(project_costs.sum())
 
     # ---------------- 1) Medarbejdere ----------------
     print("\n=== MEDARBEJDERE (INPUT + RESULTAT) ===\n")
-    print("{:<35}{:>20}{:>20}{:>20}{:>20}{:>20}".format(
-        "Medarbejder", "Timepris", "Portefølje [t]", "Undervisning [t]",
-        "Projekter [t]", "Center [t]"
+    print("{:<35}{:>12}{:>12}{:>12}{:>12}{:>12}".format(
+        "Medarbejder", "Ref.rate", "Portef.[t]", "Underv.[t]",
+        "Proj.[t]", "Center[t]",
     ))
 
     for j, emp in enumerate(employees):
@@ -181,7 +206,7 @@ def print_allocation_report(
         proj_h = proj_hours_per_emp[j]
         center_h = centertime[j]
 
-        print("{:<35}{:>20.0f}{:>20.1f}{:>20.1f}{:>20.1f}{:>20.1f}".format(
+        print("{:<35}{:>12.0f}{:>12.1f}{:>12.1f}{:>12.1f}{:>12.1f}".format(
             emp.name[:35],
             emp.hourly_rate,
             port,
@@ -189,20 +214,6 @@ def print_allocation_report(
             proj_h,
             center_h,
         ))
-
-    # NN-medarbejder
-    nn_name = all_names[-1]
-    nn_rate = all_rates[-1]
-    nn_proj_h = proj_hours_per_emp[-1]
-
-    print("{:<35}{:>20.0f}{:>20}{:>20}{:>20.1f}{:>20}".format(
-        nn_name[:35],
-        nn_rate,
-        "-",
-        "-",
-        nn_proj_h,
-        "-",
-    ))
 
     # ---------------- 2) Projekter ----------------
     print("\n=== PROJEKTER (INPUT) ===\n")
@@ -215,38 +226,46 @@ def print_allocation_report(
 
     proj_names = [p.name for p in projects]
 
-    # Header: medarbejder + én kolonne pr. projekt + sum
-    print("{:<35}".format("Medarbejder / Projekter"), end="")
+    print("{:<35}".format("Medarbejder"), end="")
     for pname in proj_names:
-        print("{:>15}".format(pname[:11]), end="")
-    print("{:>15}".format("Sum projekter"))
-    print("-" * 125)
+        print("{:>12}".format(pname[:11]), end="")
+    print("{:>12}".format("Sum proj."))
+    print()
 
-    hours_T = hours.T   # (E+1, P)
+    hours_T = hours.T   # (E, P)
 
-    # Kendte medarbejdere
     for j, emp in enumerate(employees):
         row = hours_T[j, :]          # (P,)
         row_sum = proj_hours_per_emp[j]
         print("{:<35}".format(emp.name[:35]), end="")
         for i in range(n_p):
-            print("{:>15.0f}".format(round(row[i])), end="")
-        print("{:>15.0f}".format(round(row_sum)))
+            print("{:>12.0f}".format(round(row[i])), end="")
+        print("{:>12.0f}".format(round(row_sum)))
 
-    # NN-række
-    nn_row = hours_T[-1, :]
-    print("{:<35}".format(nn_name[:35]), end="")
-    for i in range(n_p):
-        print("{:>15.0f}".format(round(nn_row[i])), end="")
-    print("{:>15.0f}".format(round(nn_proj_h)))
+    # ---------------- 4) Kontrolbudget vs. projektløn ----------------
+    print("\n=== KONTROL: PROJEKTBUDGET VS. BEREGNET PROJEKTLØN [kr] ===\n")
+    print("{:<20}{:>15}{:>15}{:>15}".format(
+        "Projekt", "Budget", "Løn (bereg.)", "Afvigelse",
+    ))
+    for i, proj in enumerate(projects):
+        budget = proj.budget
+        cost = project_costs[i]
+        diff = cost - budget
+        print("{:<20}{:>15.0f}{:>15.0f}{:>15.0f}".format(
+            proj.name[:20],
+            budget,
+            cost,
+            diff,
+        ))
 
-    # Ekstra række: samlet projektløn [kr] pr. projekt
-    print("\n*** KONTROL: SAMLET PROJEKTLØN [kr] (SKAL MATCHE PERIODENS BUDGETTER) ***")
-    print("{:<35}".format("Sum projektløn [kr]"), end="")
-    for i in range(n_p):
-        print("{:>12.0f}".format(round(project_costs[i])), end="")
-    print("{:>12.0f}".format(round(total_cost_all)))
+    print("\n{:<20}{:>15}{:>15.0f}{:>15}".format(
+        "I alt",
+        "",
+        total_cost_all,
+        "",
+    ))
     print()
+
 
 def portfolio_to_dataframe(
     employees: List[Employee],
@@ -257,50 +276,59 @@ def portfolio_to_dataframe(
     """
     Returnerer en DataFrame med porteføljen for et givent semester.
 
-    Rækker: medarbejdere (inkl. NN) + én ekstra række for samlet projektløn [kr]
+    Rækker:
+      - én række pr. medarbejder (inkl. 'NN (ufordelt)')
+      - én række for '*** Projektbudget [kr]'
+      - én række for '*** Sum projektløn [kr]'
+
     Kolonner:
-      - én kolonne pr. projekt (timer)
+      - én kolonne pr. projekt (timer for medarbejdere, kr for de to bundrækker)
       - 'Sum projekter [t]'
       - 'Undervisning [t]'
       - 'Centertid [t]'
       - 'Portefølje total [t]'
       - 'Periode'
-    Alle timer afrundes til heltal (til Excel-brug).
+
+    Alle timekolonner afrundes til heltal i output (til brug i Excel).
     """
 
-    hours = allocation_result["hours_projects"]          # (P, E+1)
+    hours = allocation_result["hours_projects"]          # (P, E)
     centertime = allocation_result["centertime"]         # (E,)
-    all_names = allocation_result["names_employees"]     # (E+1,)
+    names = allocation_result["names_employees"]         # (E,)
     total_port = allocation_result["total_portfolio"]    # (E,)
     teaching = allocation_result["teaching"]             # (E,)
-    rates = allocation_result["rates"]                   # (E+1,)
+    rate_matrix = allocation_result["rate_matrix"]       # (P, E)
 
     proj_names = [p.name for p in projects]
 
-    # Basis: medarbejdere (inkl. NN) × projekter (timer)
+    # Basis: medarbejdere × projekter (timer)
     df = pd.DataFrame(
-        hours.T,               # form (E+1, P)
-        index=all_names,
+        hours.T,               # (E, P)
+        index=names,
         columns=proj_names,
     )
 
     # Sum projekttimer pr. medarbejder
     df["Sum projekter [t]"] = df[proj_names].sum(axis=1)
 
-    teaching_full = list(teaching) + [float("nan")]
-    centertime_full = list(centertime) + [float("nan")]
-    total_port_full = list(total_port) + [float("nan")]
-
-    df["Undervisning [t]"] = teaching_full
-    df["Centertid [t]"] = centertime_full
-    df["Portefølje total [t]"] = total_port_full
+    df["Undervisning [t]"] = teaching
+    df["Centertid [t]"] = centertime
+    df["Portefølje total [t]"] = total_port
 
     df["Periode"] = semester_label
 
-    # Beregn samlet lønudgift pr. projekt [kr]
-    # hours: (P, E+1), rates: (E+1,) -> (P, E+1) -> sum over medarbejdere
-    project_costs = (hours * rates).sum(axis=1)  # (P,)
+    # 1) Projektbudgetter [kr]
+    budget_row_label = "*** Projektbudget [kr]"
+    project_budgets = np.array([p.budget for p in projects], dtype=float)  # (P,)
+    df.loc[budget_row_label, proj_names] = np.round(project_budgets, 0)
+    df.loc[budget_row_label, "Sum projekter [t]"] = np.nan
+    df.loc[budget_row_label, "Undervisning [t]"] = np.nan
+    df.loc[budget_row_label, "Centertid [t]"] = np.nan
+    df.loc[budget_row_label, "Portefølje total [t]"] = np.nan
+    df.loc[budget_row_label, "Periode"] = semester_label
 
+    # 2) Samlet projektløn [kr] pr. projekt
+    project_costs = (hours * rate_matrix).sum(axis=1)  # (P,)
     cost_row_label = "*** Sum projektløn [kr]"
     df.loc[cost_row_label, proj_names] = np.round(project_costs, 0)
     df.loc[cost_row_label, "Sum projekter [t]"] = np.nan
@@ -309,7 +337,7 @@ def portfolio_to_dataframe(
     df.loc[cost_row_label, "Portefølje total [t]"] = np.nan
     df.loc[cost_row_label, "Periode"] = semester_label
 
-    # Afrund alle time-kolonner til heltal
+    # Afrund alle time-relaterede kolonner til heltal
     hour_cols = proj_names + [
         "Sum projekter [t]",
         "Undervisning [t]",
@@ -321,32 +349,52 @@ def portfolio_to_dataframe(
     df.index.name = "Medarbejder"
     return df
 
+
 def export_portfolio_to_excel(
     employees: List[Employee],
     projects: List[Project],
     allocation_result: Dict[str, np.ndarray],
     semester_label: str,
     filename: Optional[str] = None,
+    source_excel_path: Optional[str] = None,
+    source_sheet_name: str = "Timesatser_budget",
 ) -> None:
     """
     Gemmer porteføljen i et Excel-ark.
 
     Hvis filename ikke angives, bruges:
         f"Portefølje_{semester_label}.xlsx"
+
+    Hvis source_excel_path angives, kopieres arket `source_sheet_name`
+    fra denne fil med ind som et ekstra ark i resultatfilen, så input
+    (timesatser + budgetter) og output er samlet ét sted.
     """
 
     if filename is None:
         filename = f"Portefølje_{semester_label}.xlsx"
 
-    df = portfolio_to_dataframe(
+    df_port = portfolio_to_dataframe(
         employees=employees,
         projects=projects,
         allocation_result=allocation_result,
         semester_label=semester_label,
     )
 
-    df.to_excel(
-        filename,
-        sheet_name=f"Portefølje_{semester_label}",
-        index=True,
-    )
+    # Skriv begge ark med samme writer
+    with pd.ExcelWriter(filename, engine="openpyxl") as writer:
+        # Output-ark
+        df_port.to_excel(
+            writer,
+            sheet_name=f"Portefølje_{semester_label}",
+            index=True,
+        )
+
+        # Input-ark kopieret fra kildefilen (valgfrit)
+        if source_excel_path is not None:
+            df_input = pd.read_excel(source_excel_path, sheet_name=source_sheet_name)
+            df_input.to_excel(
+                writer,
+                sheet_name=source_sheet_name,
+                index=False,
+            )
+
