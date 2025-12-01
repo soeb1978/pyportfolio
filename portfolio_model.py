@@ -174,7 +174,7 @@ def print_allocation_report(
          - rækker: medarbejdere (inkl. 'NN (ufordelt)')
          - kolonner: projekter (timer, afrundet)
          - sidste kolonne: sum projekttimer pr. medarbejder
-      4) Kontrol: projektbudget vs. beregnet projektløn
+      4) Kontrol: projektbudget vs. beregnet projektomkostning
     """
 
     hours = allocation_result["hours_projects"]                # (P, E)
@@ -189,63 +189,92 @@ def print_allocation_report(
 
     proj_hours_per_emp = hours.sum(axis=0)           # (E,)
 
-    # Samlede lønudgifter pr. projekt (kr)
-    project_costs = (hours * rate_matrix).sum(axis=1)  # (P,)
+    # Brug afrundede timer (hele timer) til omkostningsberegning
+    hours_rounded = np.round(hours)                    # (P, E)
+    project_costs = (hours_rounded * rate_matrix).sum(axis=1)  # (P,)
     total_cost_all = float(project_costs.sum())
 
-    # ---------------- 1) Medarbejdere ----------------
-    print("\n=== MEDARBEJDERE (INPUT + RESULTAT) ===\n")
-    print("{:<35}{:>12}{:>12}{:>12}{:>12}{:>12}".format(
-        "Medarbejder", "Ref.rate", "Portef.[t]", "Underv.[t]",
-        "Proj.[t]", "Center[t]",
-    ))
+    # # ---------------- 1) Medarbejdere ----------------
+    # print("\n=== MEDARBEJDERE (INPUT + RESULTAT) ===\n")
+    # print("{:<35}{:>15}{:>15}{:>15}{:>15}".format(
+    #     "Medarbejder", "Portefølje [t]", "Ekstern [t]",
+    #     "Projekter [t]", "Center [t]",
+    # ))
 
-    for j, emp in enumerate(employees):
-        port = total_port[j]
-        teach = teaching[j]
-        proj_h = proj_hours_per_emp[j]
-        center_h = centertime[j]
+    # for j, emp in enumerate(employees):
+    #     port = total_port[j]
+    #     teach = teaching[j]
+    #     proj_h = proj_hours_per_emp[j]
+    #     center_h = centertime[j]
 
-        print("{:<35}{:>12.0f}{:>12.1f}{:>12.1f}{:>12.1f}{:>12.1f}".format(
-            emp.name[:35],
-            emp.hourly_rate,
-            port,
-            teach,
-            proj_h,
-            center_h,
-        ))
+    #     print("{:<35}{:>15.1f}{:>15.1f}{:>15.1f}{:>15.1f}".format(
+    #         emp.name[:35],
+    #         port,
+    #         teach,
+    #         proj_h,
+    #         center_h,
+    #     ))
 
-    # ---------------- 2) Projekter ----------------
-    print("\n=== PROJEKTER (INPUT) ===\n")
-    print("{:<20}{:>15}".format("Projekt", "Budget [kr]"))
-    for proj in projects:
-        print("{:<20}{:>15.0f}".format(proj.name, proj.budget))
+    # # ---------------- 2) Projekter ----------------
+    # print("\n=== PROJEKTER (INPUT) ===\n")
+    # print("{:<20}{:>15}".format("Projekt", "Budget [kr]"))
+    # for proj in projects:
+    #     print("{:<20}{:>15.0f}".format(proj.name, proj.budget))
 
+    # ---------------- 3) Allokering (pivot) ----------------
+    # ---------------- 3) Allokering (pivot) ----------------
+     # ---------------- 3) Allokering (pivot) ----------------
+    # ---------------- 3) Allokering (pivot) ----------------
     # ---------------- 3) Allokering (pivot) ----------------
     print("\n=== ALLOKERING – MEDARBEJDERE × PROJEKTER (HELE TIMER) ===\n")
 
     proj_names = [p.name for p in projects]
 
+    # Header: medarbejder + projekter + Centertid + Sum tid + Portefølje + Undervisning
     print("{:<35}".format("Medarbejder"), end="")
     for pname in proj_names:
-        print("{:>12}".format(pname[:11]), end="")
-    print("{:>12}".format("Sum proj."))
-    print()
+        print("{:>15}".format(pname[:11]), end="")
+    print("{:>15}{:>15}{:>15}{:>15}".format("Centertid", "Projekttimer", "Portefølje", "Ekstern"))
+    #print()
 
     hours_T = hours.T   # (E, P)
 
     for j, emp in enumerate(employees):
-        row = hours_T[j, :]          # (P,)
-        row_sum = proj_hours_per_emp[j]
+        row = hours_T[j, :]                # (P,)
+        proj_sum = proj_hours_per_emp[j]   # sum projekttimer
+        center_h = centertime[j]           # centertid (model)
+        port = total_port[j]               # samlet portefølje
+        teach = teaching[j]                # undervisning
+
         print("{:<35}".format(emp.name[:35]), end="")
         for i in range(n_p):
-            print("{:>12.0f}".format(round(row[i])), end="")
-        print("{:>12.0f}".format(round(row_sum)))
+            print("{:>15.0f}".format(round(row[i])), end="")
 
-    # ---------------- 4) Kontrolbudget vs. projektløn ----------------
-    print("\n=== KONTROL: PROJEKTBUDGET VS. BEREGNET PROJEKTLØN [kr] ===\n")
+        if emp.name == "NN (ufordelt)":
+            # For NN: skjul alle kolonner fra og med Centertid
+            cent_str = "0"
+            sum_tid_str = f"{sum_tid:.0f}"
+            port_str = "-"
+            teach_str = "0"
+        else:
+            sum_tid = proj_sum + center_h
+            cent_str = f"{center_h:.0f}"
+            sum_tid_str = f"{sum_tid:.0f}"
+            port_str = f"{port:.0f}"
+            teach_str = f"{teach:.0f}"
+
+        print("{:>15}{:>15}{:>15}{:>15}".format(
+            cent_str,
+            sum_tid_str,
+            port_str,
+            teach_str,
+        ))
+
+
+    # ---------------- 4) Budget vs. omkostninger ----------------
+    print("\n=== KONTROL: BUDGET VS. BEREGNET OMKOSTNING [kr] ===\n")
     print("{:<20}{:>15}{:>15}{:>15}".format(
-        "Projekt", "Budget", "Løn (bereg.)", "Afvigelse",
+        "Projekt", "Budget", "Omkostning", "Afvigelse",
     ))
     for i, proj in enumerate(projects):
         budget = proj.budget
@@ -258,11 +287,16 @@ def print_allocation_report(
             diff,
         ))
 
-    print("\n{:<20}{:>15}{:>15.0f}{:>15}".format(
+    # Totaler på tværs af alle projekter
+    total_budget = sum(p.budget for p in projects)
+    total_cost_all = float(project_costs.sum())
+    total_diff = total_cost_all - total_budget
+
+    print("\n{:<20}{:>15.0f}{:>15.0f}{:>15.0f}".format(
         "I alt",
-        "",
+        total_budget,
         total_cost_all,
-        "",
+        total_diff,
     ))
     print()
 
@@ -279,7 +313,7 @@ def portfolio_to_dataframe(
     Rækker:
       - én række pr. medarbejder (inkl. 'NN (ufordelt)')
       - én række for '*** Projektbudget [kr]'
-      - én række for '*** Sum projektløn [kr]'
+      - én række for '*** Sum projektomkostning [kr]'
 
     Kolonner:
       - én kolonne pr. projekt (timer for medarbejdere, kr for de to bundrækker)
@@ -327,8 +361,10 @@ def portfolio_to_dataframe(
     df.loc[budget_row_label, "Portefølje total [t]"] = np.nan
     df.loc[budget_row_label, "Periode"] = semester_label
 
-    # 2) Samlet projektløn [kr] pr. projekt
-    project_costs = (hours * rate_matrix).sum(axis=1)  # (P,)
+    
+    # 2) Samlet projektløn [kr] pr. projekt baseret på afrundede timer
+    hours_rounded = np.round(hours)                         # (P, E)
+    project_costs = (hours_rounded * rate_matrix).sum(axis=1)  # (P,)
     cost_row_label = "*** Sum projektløn [kr]"
     df.loc[cost_row_label, proj_names] = np.round(project_costs, 0)
     df.loc[cost_row_label, "Sum projekter [t]"] = np.nan

@@ -114,10 +114,10 @@ def main():
         ("Kristoffer Bested Nielsen (KRI)", "COOLGEOHEAT II"): 3.0,
         ("Marton Major (MMAJ)", "LEG-DHC"): 3.0,
         ("Karl Woldum Tordrup (KART)", "The Change"): 3.0,
-        ("Rune Kier Nielsen (RUNI)", "LTDE-repBC"): 2.0,
-        ("Rune Kier Nielsen (RUNI)", "COOLGEOHEAT II"): 3.0,
+        ("Rune Kier Nielsen (RUNI)", "LTDE-repBC"): 2.9,
+        ("Rune Kier Nielsen (RUNI)", "COOLGEOHEAT II"): 2.0,
         ("Søren Andersen (SSSA)", "HEATCODE"): 3.0,
-        ("Mathias Larsen (MATL)", "The Change"): 3.0,
+        ("Mathias Larsen (MATL)", "COOLGEOHEAT II"): 3.0,
     }
 
     try:
