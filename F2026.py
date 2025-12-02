@@ -157,7 +157,7 @@ def load_external_and_portfolios_from_excel(
 
 def main():
     semester = "F2026"
-    excel_path = "time_satser_F2026.xlsx"
+    excel_path = "timer_satser_portefølje_F2026.xlsx"
 
     # Medarbejdere – kun navne her; portefølje/undervisning sættes fra Excel
     employees = [
@@ -193,7 +193,7 @@ def main():
     # 1) Indlæs timesatser og budgetter
     rate_matrix, budgets_arr = load_rates_and_budgets_from_excel(
         path=excel_path,
-        sheet_name="Timesatser_budget",
+        sheet_name="Timesatser",
         employees=employees,
         projects=projects,
     )
@@ -245,7 +245,7 @@ def main():
         allocation_result=result,
         semester_label=semester,
         source_excel_path=excel_path,        # inputfil med timesatser + budgetter
-        source_sheet_name="Timesatser_budget",
+        source_sheet_name="Timesatser",
     )
     print(f"Porteføljen er gemt i 'Portefølje_{semester}.xlsx'.")
 

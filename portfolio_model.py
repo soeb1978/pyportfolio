@@ -319,7 +319,7 @@ def portfolio_to_dataframe(
     Rækker:
       - én række pr. medarbejder (inkl. 'NN (ufordelt)')
       - én række for '*** Projektbudget [kr]'
-      - én række for '*** Sum projektløn [kr]'
+      - én række for '*** Projektomkostning [kr]'
 
     Kolonner:
       - én kolonne pr. projekt (timer for medarbejdere, kr for de to bundrækker)
@@ -363,7 +363,7 @@ def portfolio_to_dataframe(
         df.loc[nn_label, "Centertid [t]"] = np.nan
 
     # 1) Projektbudgetter [kr]
-    budget_row_label = "*** Projektbudget [kr]"
+    budget_row_label = "Projektbudget [kr]"
     project_budgets = np.array([p.budget for p in projects], dtype=float)  # (P,)
     df.loc[budget_row_label, proj_names] = np.round(project_budgets, 0)
     df.loc[budget_row_label, "Sum projekter [t]"] = np.nan
@@ -372,10 +372,10 @@ def portfolio_to_dataframe(
     df.loc[budget_row_label, "Portefølje total [t]"] = np.nan
     df.loc[budget_row_label, "Periode"] = semester_label
 
-    # 2) Samlet projektløn [kr] pr. projekt baseret på afrundede timer
+    # 2) Samlet projektomkostning [kr] pr. projekt baseret på afrundede timer
     hours_rounded = np.round(hours)                         # (P, E)
     project_costs = (hours_rounded * rate_matrix).sum(axis=1)  # (P,)
-    cost_row_label = "*** Sum projektløn [kr]"
+    cost_row_label = "Projektomkostning [kr]"
     df.loc[cost_row_label, proj_names] = np.round(project_costs, 0)
     df.loc[cost_row_label, "Sum projekter [t]"] = np.nan
     df.loc[cost_row_label, "Undervisning [t]"] = np.nan
@@ -403,7 +403,7 @@ def export_portfolio_to_excel(
     semester_label: str,
     filename: Optional[str] = None,
     source_excel_path: Optional[str] = None,
-    source_sheet_name: str = "Timesatser_budget",
+    source_sheet_name: str = "Timesatser",
 ) -> None:
     """
     Gemmer porteføljen i et Excel-ark.
